@@ -4,6 +4,7 @@ package debinfo
 
 import (
 	"archive/tar"
+	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
@@ -31,38 +32,47 @@ func GetControlInfoFromDeb(path string) ([]byte, error) {
 
 		if err != nil {
 			if err == io.EOF {
-				return nil, errors.New("control.tar.xz is not found")
+				return nil, errors.New("control.tar.{xz,gz} is not found")
 			}
 			return nil, fmt.Errorf("failed to read ar archive: %v", err)
 		}
 
-		if arHeader.Name != "control.tar.xz" {
-			continue
-		}
-
-		xzReader, err := xz.NewReader(reader)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse control.tar.xz: %v", err)
-		}
-
-		tarReader := tar.NewReader(xzReader)
-		for true {
-			tarHeader, err := tarReader.Next()
-
+		switch arHeader.Name {
+		case "control.tar.xz":
+			xzReader, err := xz.NewReader(reader)
 			if err != nil {
-				if err == io.EOF {
-					return nil, errors.New("./control is not found in control.tar.xz")
-				}
-				return nil, fmt.Errorf("failed to read control.tar archive: %v", err)
+				return nil, fmt.Errorf("failed to parse %s: %v", arHeader.Name, err)
 			}
+			return readControlTar(xzReader)
+		case "control.tar.gz":
+			gzReader, err := gzip.NewReader(reader)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse %s: %v", arHeader.Name, err)
+			}
+			return readControlTar(gzReader)
+		}
+	}
+	return nil, errors.New("logic error - unreachable code")
+}
 
-			if tarHeader.Name == "./control" {
-				content, err := ioutil.ReadAll(tarReader)
-				if err != nil {
-					return nil, fmt.Errorf("failed to read ./control file from control.tar.xz: %v", err)
-				}
-				return content, nil
+func readControlTar(r io.Reader) ([]byte, error) {
+	tarReader := tar.NewReader(r)
+	for true {
+		tarHeader, err := tarReader.Next()
+
+		if err != nil {
+			if err == io.EOF {
+				return nil, errors.New("control is not found in control.tar")
 			}
+			return nil, fmt.Errorf("failed to read control.tar archive: %v", err)
+		}
+
+		if tarHeader.Name == "control" || tarHeader.Name == "./control" {
+			content, err := ioutil.ReadAll(tarReader)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read control file from control.tar: %v", err)
+			}
+			return content, nil
 		}
 	}
 	return nil, errors.New("logic error - unreachable code")
